@@ -1,0 +1,81 @@
+s.quit;
+(
+var name, a, server;
+w = Window("ROLI Vox I ", Rect(1400, 0, 520, 240))
+.front
+.alwaysOnTop_(true)
+.background = Color.new255(76,76,76);
+c = Stethoscope.new(s, view:w.view);
+s.reboot;
+)
+
+(
+MIDIIn.connectAll;
+
+SynthDef(\jorRoli, {
+	arg freq, mod=0, touch=0,amp=0.01, gate=1, out;
+	var env, sig;
+	env = EnvGen.kr(Env.adsr(0.5, 0.5, 1.0, 0.8), gate, doneAction: 2);
+	sig = VarSaw.ar(
+		freq.lag(0.01)* {Rand(0.99, 1.01)} !2,
+		width: 1.0 - touch
+	);
+	sig = LPF.ar(sig, 18000 * mod);
+    Out.ar(out, sig * env * amp * 0.2);
+}).add;
+)
+
+(
+var notes, synths, on, off, mod, bend, touch;
+~num_channels = 16;
+~bend_range = 24;
+
+notes = Array.newClear(~num_channels);
+synths = Array.newClear(~num_channels);
+//NoteOn&Vel
+on = MIDIFunc.noteOn({ | vel, num, chan, src |
+	// ("on" + chan + num + vel).postln;
+	notes[chan] = num;
+	synths[chan] = Synth(\jorRoli, [
+		\freq, num.midicps,
+		\amp, vel * (1.0/127.0)]);
+});
+//NoteOff&Vel
+off = MIDIFunc.noteOff({ | vel, num, chan, src |
+	synths[chan].release;
+	notes[chan] = nil;
+	synths[chan] = nil;
+});
+
+
+//Slide
+mod = MIDIFunc.cc({ | val, num, chan, src |
+	if (synths[chan] != nil) {
+		synths[chan].set(\mod, val.linexp(0, 127, 0.001, 1.0))};
+}, 74);
+
+
+//Glide
+bend = MIDIFunc.bend({ | val, chan, src |
+	var bend = ~bend_range * ((val - 8192)/8192);
+	if (synths[chan] != nil) {
+		synths[chan].set(\freq, (notes[chan] + bend).midicps);
+	};
+});
+//Pressure
+touch = MIDIFunc.touch({ | val, chan, src |
+	// ("touch" + chan + val).postln;
+	if (synths[chan] != nil) {
+		synths[chan].set(\touch, val * (1.0/127.0));
+	};
+});
+
+q = {
+	on.free;
+	off.free;
+	mod.free;
+	bend.free;
+	touch.free;
+}
+)
+q.value;
