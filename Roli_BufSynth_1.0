@@ -1,0 +1,390 @@
+(
+//SET THESE FIRST
+~path = ("/Volumes/DISK1/Producing/01 Instruments & Samples/01_Samples/Jorgalad/0000_SC_INPUT/");
+~dir1 = \bass ;
+~dir2 = \cymbals ;
+~dir3 = \drops ;
+~dir4 = \foley ;
+~dir5 = \vox ;
+~dir6 = \kicks ;
+~dir7 = \melodic ;
+~dir8 = \strings ;
+
+//================ 1. SERVER CONFIG ==================//
+ServerOptions.devices;
+s = Server.local;
+//s.options.inDevice = "Fireface UC Mac (23724730)";
+//s.options.outDevice = "Fireface UC Mac (23724730)";
+s.options.inDevice = "Built-in Input";
+s.options.outDevice = "Built-in Output";
+s.options.numInputBusChannels = 16;
+s.options.numOutputBusChannels = 16;
+s.options.sampleRate_(44100);
+s.options.memSize_(2.pow(20));
+
+ServerBoot.removeAll;
+ServerTree.removeAll;
+ServerQuit.removeAll;
+
+//================ 2. GLOBAL VARIABLES ================//
+~masterOut = 0;
+~directory = ~dir1;
+~sample = 0;
+
+MIDIClient.init;
+MIDIIn.connectAll;
+
+//================ 3. SCORE FUNCTIONS ================//
+~makeBuffers = {
+	b = Dictionary.new;
+	PathName(~path).entries.do {
+		arg subfolder;
+		b.add (
+			subfolder.folderName.asSymbol ->
+			Array.fill(
+				subfolder.entries.size,
+				{
+					arg i;
+					Buffer.read(s, subfolder.entries[i].fullPath);
+				}
+			);
+		);
+	};
+};
+
+~makeBusses = {
+	~bus = Dictionary.new;
+	~bus.add(\fx1Bus -> Bus.audio(s, 2));
+};
+
+~cleanup = {
+	s.newBusAllocators;
+	ServerBoot.removeAll;
+	ServerTree.removeAll;
+	ServerQuit.removeAll;
+};
+~makeNodes = {
+	s.bind( {
+	~mainGrp = Group.new;
+	~fxGrp1 = Group.after(~mainGrp);
+	//FX 1
+	~fxSynth1 = Synth.new(
+		\fx1,
+			[
+				\amp, 1,
+				\predelay, 0.1,
+				\revtime, 1.8,
+				\lpf, 4500,
+				\mix, 0,
+				\in, ~bus[\fx1Bus],
+				\out, ~masterOut,
+			],
+			~fxGrp1
+		);
+	});
+};
+
+//================ 4. REGISTER FUNCTIONS ==============//
+ServerBoot.add(~makeBuffers);
+ServerBoot.add(~makeBusses);
+ServerQuit.add(~cleanup);
+
+~s1a = Bus.control(s); ~s1a.set(0.1);                //Amp
+~s1f = Bus.control(s); ~s1f.set(0.0);                 //Freq Shift
+~s1c = Bus.control(s); ~s1c.set(0.0);                //Filter Cutoff
+~s1r = Bus.control(s); ~s1r.set(1.0);                 //Filter Resonance
+~s1gstart = Bus.control(s); ~s1gstart.set(1.0);     //Grain Start
+~s1trem = Bus.control(s); ~s1trem.set(0.0);             //Tremolo
+
+~s2m = Bus.control(s); ~s2m.set(0.1);             //Reverb Mix
+
+//================ 5. BOOT SERVER ===================//
+//SYNTHS
+s.waitForBoot({
+	s.sync;
+	SynthDef(\jorRoli_02, {
+		arg
+		amp = ~s1a,
+		freqshift = ~s1f,
+		cutoff = ~s1c,
+		resonance= ~s1r,
+		gStart= ~s1gstart,
+		tremolo = ~s1trem,
+		grainDur = 0.1,
+		mod=0,
+		touch=0,
+		buf4=0, freq, out=0, gate=1, mGrains=12,
+		att=0.01, dec=0.6, sus=0.9, rel=1; //0.1 1 1 1
+		var env, sig1, sig2, sig3, trem;
+	    env = EnvGen.kr(Env.adsr(att, dec, sus, rel), gate, doneAction:2);
+		sig1 = PlayBuf.ar(
+			numChannels: 2,
+			bufnum: buf4,
+			rate: freq * freqshift /8,
+			//trigger: SinOsc.ar(20*mod),
+			trigger: 1,
+			startPos: gStart,
+			loop: 1,
+		);
+		sig2 = GrainIn.ar(
+			numChannels: 2,
+			trigger: Impulse.ar(10),
+			dur: 0.1 + touch,
+			in: sig1);
+		sig3 = MoogFF.ar(sig2, 20 + cutoff.lag(0.3), gain: resonance);
+		trem = Saw.ar(10 * mod, mul: tremolo, add: 0.5 - tremolo);
+		Out.ar(out, sig3 * amp * env * trem)
+	}).add;
+
+// FX =================================
+	SynthDef(\fx1, {
+		arg in, out, mix = 0;
+		var input, sig;
+		input = In.ar(in, 2);
+		sig = FreeVerb.ar(input, mix);
+		Out.ar(out, sig);
+	}).add;
+
+s.sync;
+ServerTree.add(~makeNodes);
+s.freeAll;
+s.sync;
+"Done Setting Up".postln;
+});
+)
+
+
+// GUI & MIDI ===============================
+(
+var name, a, server, m, funcs, dir, notes, synths, on, off, mod, bend, touch;
+Window.closeAll;
+
+w = Window("ROLI AutoSampler", Rect(0, 0, 840, 500))
+.front
+.alwaysOnTop_(true)
+.background = Color.new255(76,76,76);
+c = Stethoscope.new(s, 2, view:w.view);
+w.onClose = { c.free };
+
+~sedit = SoundFileView(w,Rect(0,350,850,150));
+f = SoundFile.new;
+f.openRead(b[~directory][~sample].path);
+~sedit.soundfile = f;
+~sedit.read(0, f.numFrames);
+~sedit.gridOn_(false);
+~sedit.refresh;
+
+StaticText(w, Rect(180, 260, 100, 30))
+.string_("Select Sample")
+.stringColor_(Color(1.0, 1.0, 1.0));
+~numberBox = NumberBox(w, Rect(140, 260, 30, 30))
+.clipLo_(0)
+.clipHi_(40)
+.action_({
+	arg nbox1;
+	~sample = nbox1.value().postln;
+	b[~directory][~sample];
+	f.openRead(b[~directory][~sample].path);
+	~sedit.soundfile = f;            // set soundfile
+	~sedit.read(0, f.numFrames);     // read in the entire file.
+	~sedit.refresh;                  // refresh to display the file.
+});
+
+~menu = PopUpMenu(w, Rect(20, 260, 100, 30))
+.items_( [~dir1, ~dir2, ~dir3, ~dir4, ~dir5, ~dir6, ~dir7, ~dir8] );
+~menu.action =  {
+	arg menu;
+	if ( menu.value == 0,
+		{~directory = ~dir1},
+	if ( menu.value == 1,
+		{~directory = ~dir2},
+	if ( menu.value == 2,
+		{~directory = ~dir3},
+	if ( menu.value == 3,
+		{~directory = ~dir4},
+	if ( menu.value == 4,
+		{~directory = ~dir5},
+	if ( menu.value == 5,
+		{~directory = ~dir6},
+	if ( menu.value == 6,
+		{~directory = ~dir7},
+	if ( menu.value == 7,
+		{~directory = ~dir8},
+	f.openRead(b[~directory][~sample].path);
+	~sedit.soundfile = f;
+	~sedit.read(0, f.numFrames);
+	~sedit.refresh;
+										))))))))
+};
+
+
+// 2D Slider Cutoff
+StaticText(w, Rect(440, 225, 150, 30)).string_("Cutoff").stringColor_(Color(1.0, 1.0, 1.0));
+StaticText(w, Rect(280, 6, 150, 30)).string_("Resonance").stringColor_(Color(1.0, 1.0, 1.0));
+~slider1 = Slider2D(w, Rect(280, 30, 200, 200))
+.background_(Color(0.1, 0.1, 0.1))
+.y_(0.0)
+.x_(1.0)
+.action_({
+	arg obj1;
+	var cutoff, resonance;
+	cutoff = obj1.x.value.linexp(0,1,15.0, 20000.0).postln;
+	resonance= obj1.y.value.linlin(0,1,0.0, 3.9).postln;
+	~s1c.set(cutoff);
+	~s1r.set(resonance);
+})
+.activex_(1.0)
+.activey_(0.0)
+;
+
+StaticText(w, Rect(489, 180, 150, 30))
+.string_("FreqShift")
+.stringColor_(Color(1.0, 1.0, 1.0));
+~slider2 = Slider(w, Rect(500, 30, 30, 150))
+.background_(Color(0.1, 0.1, 0.1))
+.value_(0.0)
+.action_({
+	arg obj2;
+	var freqshift;
+	freqshift = obj2.value.linlin(0,1,1.0, 0.01).postln;
+	~s1f.set(freqshift);
+})
+.valueAction_(0.0);
+
+StaticText(w, Rect(564, 180, 150, 30))
+.string_("Reverb")
+.stringColor_(Color(1.0, 1.0, 1.0));
+~slider3 = Slider(w, Rect(570, 30, 30, 150))
+.background_(Color(0.1, 0.1, 0.1))
+.action_({
+	arg obj3;
+	var reverb;
+	reverb = obj3.value.linlin(0,1,0, 1).postln;
+	~fxSynth1.set(\mix, reverb);
+})
+.valueAction_(0.0);
+
+StaticText(w, Rect(632, 180, 150, 30))
+.string_("Tremolo")
+.stringColor_(Color(1.0, 1.0, 1.0));
+~slider4 = Slider(w, Rect(640, 30, 30, 150))
+.background_(Color(0.1, 0.1, 0.1))
+.action_({
+	arg obj4;
+	var tremolo;
+	tremolo = obj4.value.linexp(0,1, 0.001, 0.5).postln;
+	~s1trem.set(tremolo);
+})
+.valueAction_(0.0);
+
+StaticText(w, Rect(700, 180, 150, 30))
+.string_("Start Pos")
+.stringColor_(Color(1.0, 1.0, 1.0));
+~slider5 = Slider(w, Rect(710, 30, 30, 150))
+.step_(0.005)
+.background_(Color(0.1, 0.1, 0.1))
+.action_({
+	arg obj5;
+	var gStart;
+	gStart = obj5.value.linlin(0,1,1, b[~directory][~sample].numFrames).postln;
+	~s1gstart.set(gStart);
+})
+.valueAction_(0.0);
+
+//LEVEL
+StaticText(w, Rect(783, 5, 150, 30))
+.string_("Level")
+.stringColor_(Color(1.0, 1.0, 1.0));
+~slider6 = Slider(w.view, Rect(785, 30, 30, 200))
+.background_(Color(0.2, 0.75, 0.95))
+.action_({
+	arg obj6;
+	var amp;
+	amp = obj6.value.linexp(0,1, 0.001, 0.5).postln;
+	~s1a.set(amp);
+}
+)
+.valueAction_(0.4);
+
+~ampEnv = Env.new([ 0, 0.9, 0.8, 0 ],[ 0.03, 12, 0.3]);
+e = EnvelopeView(w, Rect(500, 225, 220, 100))
+.setEnv(~ampEnv)
+.drawLines_(true)
+.selectionColor_(Color.red)
+.drawRects_(true)
+.step_(0.01)
+.keepHorizontalOrder_(true)
+.setEditable(0,false)
+.setEditable(3,false)
+.action_{
+	arg e;
+	~ampEnv.levels = e.value[1];
+	~ampEnv.times = e.value[0].differentiate.drop(1);
+	~ampEnv.duration_(~timescale);
+}
+.thumbSize_(18);
+
+
+~num_channels = 16;
+~bend_range = 24;
+
+notes = Array.newClear(~num_channels);
+synths = Array.newClear(~num_channels);
+//NoteOn&Vel
+on = MIDIFunc.noteOn({ | vel, num, chan, src |
+	// ("on" + chan + num + vel).postln;
+	notes[chan] = num;
+	synths[chan] = Synth(\jorRoli_02, [
+		\freq, num.midiratio,
+		\amp, vel * (0.5/127.0),
+		\buf4, b[~directory][~sample],
+		\amp, ~s1a.asMap,
+		\freqshift, ~s1f.asMap,
+		\cutoff, ~s1c.asMap,
+		\resonance, ~s1r.asMap,
+		\gStart, ~s1gstart.asMap,
+		\tremolo, ~s1trem.asMap,
+		\out, ~bus[\fx1Bus],
+		\ampEnv, ~ampEnv
+	], ~mainGrp);
+});
+
+
+//NoteOff&Vel
+off = MIDIFunc.noteOff({ | vel, num, chan, src |
+	synths[chan].release;
+	notes[chan] = nil;
+	synths[chan] = nil;
+});
+
+//Slide
+mod = MIDIFunc.cc({ | val, num, chan, src |
+	if (synths[chan] != nil) {
+	synths[chan].set(\mod, val * (1.0/127.0))};
+}, 74);
+
+
+//Glide
+bend = MIDIFunc.bend({ | val, chan, src |
+	var bend = ~bend_range * ((val - 8192)/8192);
+	if (synths[chan] != nil) {
+		synths[chan].set(\freq, (notes[chan] + bend).midicps);
+	};
+});
+//Pressure
+touch = MIDIFunc.touch({ | val, chan, src |
+	// ("touch" + chan + val).postln;
+	if (synths[chan] != nil) {
+		synths[chan].set(\touch, val.linexp(0,1,0.01, 4));
+//		cutoff = slider3.value.linexp(0,1,15.0, 20000.0).postln;
+	};
+});
+q = {
+	on.free;
+	off.free;
+	mod.free;
+	bend.free;
+	touch.free;
+}
+)
+q.value;
